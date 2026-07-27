@@ -8,7 +8,7 @@ performs first-boot configuration with cloud-init.
 > **Project status — Milestone 1 in progress:** the current configuration
 > creates one Ubuntu VM intended to become the Kubernetes control-plane node.
 > Multi-node provisioning is planned. The resulting nodes can later be
-> configured by the separate `k8s-cluster-setup` project.
+> configured by the separate `k8s-ansible-cluster-setup` project.
 
 ## What this project demonstrates
 
@@ -32,7 +32,7 @@ This repository owns the infrastructure lifecycle up to SSH-ready Ubuntu nodes:
 - SSH readiness
 - Terraform outputs
 
-The companion `k8s-cluster-setup` repository owns everything performed inside
+The companion `k8s-ansible-cluster-setup` repository owns everything performed inside
 the nodes after first boot:
 
 - operating-system configuration
@@ -43,7 +43,7 @@ the nodes after first boot:
 - final cluster validation
 
 Terraform does not install or bootstrap Kubernetes. It exposes infrastructure
-facts; `k8s-cluster-setup` owns Ansible inventory construction, configuration
+facts; `k8s-ansible-cluster-setup` owns Ansible inventory construction, configuration
 management, and the Kubernetes lifecycle.
 
 ## Architecture
@@ -60,7 +60,7 @@ flowchart LR
     CP --> ID["Stable MAC + DHCP identity"]
     WK -. planned .-> ID
     ID --> OUT["Terraform outputs"]
-    OUT -. connection details consumed separately .-> EXT["External consumer<br/>for example: k8s-cluster-setup"]
+    OUT -. connection details consumed separately .-> EXT["External consumer<br/>for example: k8s-ansible-cluster-setup"]
 ```
 
 The current implementation manages five resources:
@@ -273,6 +273,6 @@ VM identity
 
 Cloud-init keeps first-boot customization outside the image. Terraform outputs
 describe the resulting infrastructure without depending on a specific
-configuration-management tool. The separate `k8s-cluster-setup` project may
+configuration-management tool. The separate `k8s-ansible-cluster-setup` project may
 consume node connection details and owns inventory construction, configuration
 management, and Kubernetes lifecycle operations.
