@@ -1,9 +1,17 @@
 # Kubernetes Homelab Infrastructure on Libvirt
 
+[![Terraform CI](https://github.com/edimatt/k8s-terraform-cluster-setup/actions/workflows/terraform-ci.yml/badge.svg?branch=main)](https://github.com/edimatt/k8s-terraform-cluster-setup/actions/workflows/terraform-ci.yml)
+
 Terraform infrastructure for the virtual-machine layer of a personal Kubernetes
 homelab. The project downloads an Ubuntu cloud image, creates an efficient
 copy-on-write system disk, boots a UEFI virtual machine on KVM/libvirt, and
 performs first-boot configuration with cloud-init.
+
+## Continuous integration
+
+GitHub Actions checks Terraform formatting, provider initialization without a
+backend, and Terraform configuration validation on pull requests and pushes to
+`main`. It does not provision or modify libvirt infrastructure.
 
 > **Project status — Milestone 1 in progress:** the current configuration
 > creates one Ubuntu VM intended to become the Kubernetes control-plane node.
