@@ -1,15 +1,14 @@
-# Kubernetes Homelab on Libvirt
+# Kubernetes Homelab Infrastructure on Libvirt
 
-Terraform infrastructure for building a reproducible Kubernetes cluster on a
-local KVM/libvirt host. The project starts at the virtualization layer: it
-downloads an Ubuntu cloud image, creates a copy-on-write system disk, boots a
-UEFI virtual machine, and configures secure SSH access automatically with
-cloud-init.
+Terraform infrastructure for the virtual-machine layer of a personal Kubernetes
+homelab. The project downloads an Ubuntu cloud image, creates an efficient
+copy-on-write system disk, boots a UEFI virtual machine on KVM/libvirt, and
+performs first-boot configuration with cloud-init.
 
-> **Project status — foundation complete:** the current configuration creates
-> one Ubuntu VM intended to become the Kubernetes control-plane node. Kubernetes
-> installation, worker-node scaling, and cluster bootstrapping are the next
-> phases.
+> **Project status — Milestone 1 in progress:** the current configuration
+> creates one Ubuntu VM intended to become the Kubernetes control-plane node.
+> Multi-node provisioning is planned. The resulting nodes can later be
+> configured by the separate `k8s-cluster-setup` project.
 
 ## What this project demonstrates
 
@@ -18,33 +17,65 @@ cloud-init.
 - Efficient qcow2 disks backed by a shared Ubuntu base image
 - Unattended first-boot configuration with cloud-init
 - Key-only SSH access and a non-root sudo user
+- Stable network identity through a fixed MAC address
 - Parameterized compute, storage, networking, and image settings
+
+## Project boundary
+
+This repository owns the infrastructure lifecycle up to SSH-ready Ubuntu nodes:
+
+- libvirt network attachment, storage, and VM lifecycle
+- Ubuntu cloud-image provisioning
+- copy-on-write system disks
+- cloud-init first-boot configuration
+- stable node network identity
+- SSH readiness
+- Terraform outputs
+
+The companion `k8s-cluster-setup` repository owns everything performed inside
+the nodes after first boot:
+
+- operating-system configuration
+- container runtime and Kubernetes packages
+- `kubeadm` cluster bootstrap
+- worker-node joining
+- CNI, ingress, storage, monitoring, and security add-ons
+- final cluster validation
+
+Terraform does not install or bootstrap Kubernetes. It exposes infrastructure
+facts; `k8s-cluster-setup` owns Ansible inventory construction, configuration
+management, and the Kubernetes lifecycle.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     TF["Terraform"] --> LV["libvirt / KVM"]
-    CI["cloud-init<br/>user + SSH key + guest agent"] --> VM
-    IMG["Ubuntu 26.04<br/>cloud image"] --> BASE["Base qcow2 volume"]
-    BASE --> ROOT["Copy-on-write<br/>root volume"]
-    LV --> VM["k8s-control VM<br/>2 vCPU · 4 GiB RAM · 40 GiB"]
-    ROOT --> VM
-    VM --> NET["default libvirt network<br/>NAT + DHCP via virbr0"]
-    NET --> LAN["Host / outbound network"]
+    LV --> IMG["Ubuntu base image"]
+    IMG --> DISKS["qcow2 copy-on-write disks"]
+    DISKS --> CP["Control-plane VM<br/>(current)"]
+    DISKS -. planned .-> WK["Worker VMs<br/>(planned)"]
+    CI["cloud-init<br/>user + SSH key + guest agent"] --> CP
+    CI -. planned .-> WK
+    CP --> ID["Stable MAC + DHCP identity"]
+    WK -. planned .-> ID
+    ID --> OUT["Terraform outputs"]
+    OUT -. connection details consumed separately .-> EXT["External consumer<br/>for example: k8s-cluster-setup"]
 ```
 
-Terraform manages four main resources:
+The current implementation manages five resources:
 
 1. A downloaded Ubuntu base volume.
 2. A resizable qcow2 root volume backed by that image.
-3. A cloud-init ISO containing instance metadata and user configuration.
-4. A running x86_64 KVM domain attached to the selected storage pool and
+3. Rendered cloud-init data containing instance metadata and user
+   configuration.
+4. A libvirt volume containing the generated cloud-init ISO.
+5. A running x86_64 KVM domain attached to the selected storage pool and
    virtual network.
 
-The default libvirt network provides DHCP and outbound connectivity. The VM is
-not exposed directly on the physical LAN; inbound access from other machines
-requires routing, port forwarding, or a bridged network.
+The default libvirt network provides DHCP and outbound connectivity through
+`virbr0`. The VM is not exposed directly on the physical LAN; inbound access
+from other machines requires routing, port forwarding, or a bridged network.
 
 ## Prerequisites
 
@@ -64,8 +95,17 @@ installs OVMF elsewhere.
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-Edit `terraform.tfvars` to select your SSH key and username, then provision the
-VM:
+Review `terraform.tfvars` before provisioning. The repository defaults are the
+author's real homelab values:
+
+```hcl
+vm_user            = "edoardo"
+ssh_public_key_path = "~/.ssh/eagle_ed25519.pub"
+```
+
+The example variable file intentionally demonstrates how to override them.
+
+Initialize Terraform, review the plan, and create the VM:
 
 ```bash
 terraform init
@@ -79,13 +119,14 @@ Find the DHCP-assigned address:
 virsh -c qemu:///system domifaddr k8s-control
 ```
 
-Connect using the username configured in `terraform.tfvars`:
+Connect using the configured username:
 
 ```bash
-ssh ubuntu@<vm-ip>
+ssh edoardo@<vm-ip>
 ```
 
-When finished, remove the managed infrastructure:
+If `terraform.tfvars` overrides `vm_user`, use that value instead. When
+finished, remove the managed infrastructure:
 
 ```bash
 terraform destroy
@@ -103,12 +144,49 @@ terraform destroy
 | `root_disk_size_gib` | `40` | Root disk capacity in GiB |
 | `libvirt_pool` | `default` | Existing storage pool |
 | `libvirt_network` | `default` | Existing virtual network |
-| `mac_address` | `52:54:00:12:34:56` | Stable VM MAC address |
+| `mac_address` | `52:54:00:12:34:56` | Stable VM network identity |
 | `image_url` | Ubuntu 26.04 amd64 cloud image | Base operating-system image |
 | `ssh_public_key_path` | `~/.ssh/eagle_ed25519.pub` | Public key installed in the VM |
 
+The fixed MAC address is intentional. It preserves the node's network identity
+across VM recreation and supports a deterministic DHCP lease or reservation.
+The planned multi-node design will assign each node its own unique,
+deterministic fixed MAC address.
+
 See [`terraform.tfvars.example`](terraform.tfvars.example) for a minimal local
-configuration. Do not put private keys or other secrets in Terraform variables.
+configuration. Usernames and paths to public SSH keys are configuration, not
+secrets.
+
+## Terraform outputs
+
+The current outputs are:
+
+| Output | Description |
+| --- | --- |
+| `vm_name` | Name of the created libvirt domain |
+| `network_name` | Libvirt network attached to the VM |
+| `mac_address` | Fixed MAC address assigned to the VM |
+| `ssh_command` | SSH command template containing an `<vm-ip>` placeholder |
+
+Inspect them after an apply:
+
+```bash
+terraform output
+```
+
+Node names, MAC addresses, discovered or reserved IP addresses, and per-node SSH
+commands are planned outputs for the multi-node implementation. External tools
+may consume these values independently.
+
+## Terraform state
+
+Terraform state and backups are excluded from Git. Local state is acceptable
+for this personal homelab because execution is currently local and
+single-operator. A remote backend may be introduced later if CI automation or
+shared execution requires state locking and centralized storage.
+
+State must still be treated carefully and reviewed for sensitive values before
+it is copied, shared, or migrated.
 
 ## Repository layout
 
@@ -119,26 +197,82 @@ configuration. Do not put private keys or other secrets in Terraform variables.
 ├── outputs.tf                 # VM identity and SSH helper output
 ├── versions.tf                # Terraform and provider constraints
 ├── cloud-init.yaml.tftpl      # First-boot guest configuration
-└── terraform.tfvars.example   # Example local values
+├── terraform.tfvars.example   # Example local values
+└── .gitignore                 # Local state and generated-file exclusions
 ```
 
 ## Roadmap
 
-- [x] Provision an Ubuntu VM on local libvirt/KVM
-- [x] Automate user, SSH key, and guest-agent configuration
-- [x] Use a reusable cloud image and copy-on-write root disk
-- [ ] Refactor the VM definition to create one control-plane and multiple workers
-- [ ] Give every node deterministic addressing and hostnames
-- [ ] Install the container runtime and Kubernetes packages
-- [ ] Bootstrap the control plane with `kubeadm`
-- [ ] Join worker nodes and install a CNI plugin
-- [ ] Add validation, formatting, and plan checks in CI
-- [ ] Move Terraform state out of the repository
+### Milestone 1 — Single-node foundation
+
+- [x] Provision one Ubuntu control-plane VM on local libvirt/KVM
+- [x] Create a reusable Ubuntu base image and copy-on-write root disk
+- [x] Configure the user, SSH key, and QEMU guest agent with cloud-init
+- [x] Preserve node network identity with a fixed MAC address
+- [x] Expose the current VM, network, MAC, and SSH helper outputs
+
+### Milestone 2 — Multi-node infrastructure
+
+- [ ] Provision one control-plane node and a configurable number of workers
+- [ ] Assign every node a unique, deterministic fixed MAC address
+- [ ] Assign stable hostnames
+- [ ] Provide deterministic DHCP leases or reservations
+- [ ] Reuse copy-on-write disks backed by the shared base image
+
+### Milestone 3 — Infrastructure outputs and orchestration
+
+- [ ] Expose per-node infrastructure outputs
+- [ ] Document output semantics
+- [ ] Document how external configuration tools can consume the outputs
+- [ ] Provide an optional external orchestration example
+
+### Milestone 4 — Validation and CI
+
+- [ ] Validate SSH readiness for all provisioned nodes
+- [ ] Validate the resulting Kubernetes cluster through the external workflow
+- [ ] Add Terraform formatting, validation, and plan checks in CI
+- [ ] Add downloaded-image checksum verification
+- [ ] Evaluate remote state for automated execution
+
+## Security considerations
+
+- Cloud-init configures key-only SSH access and disables password
+  authentication.
+- Private keys and credentials must never be committed to the repository.
+- Public SSH-key paths and usernames are configuration values, not secrets.
+- Terraform state can contain sensitive values and must remain excluded from
+  Git and be reviewed before sharing.
+- The Ubuntu image is currently downloaded directly from `image_url`; checksum
+  verification is planned but not yet implemented.
+
+## Known limitations
+
+- The configuration currently creates one VM only.
+- Networking uses the existing default libvirt NAT network.
+- There are no per-node outputs for a multi-node topology yet.
+- End-to-end Kubernetes installation and bootstrap are not implemented in this
+  repository.
+- The OVMF firmware path is distribution-specific.
+- The current SSH output contains an IP-address placeholder rather than a
+  discovered or reserved address.
 
 ## Design notes
 
-The base image and root disk are separate so additional nodes can reuse the
-downloaded image without duplicating it. A fixed MAC address makes DHCP
-reservations possible, while cloud-init keeps guest customization outside the
-image. These choices prepare the project for turning the single-VM foundation
-into a repeatable multi-node cluster.
+Separating the base image from the root disk allows future nodes to reuse one
+downloaded image without duplicating it. Each VM can receive its own resizable
+copy-on-write disk while retaining a consistent operating-system baseline.
+
+Stable network identity is equally important to the integration boundary:
+
+```text
+VM identity
+  → stable fixed MAC address
+  → stable DHCP lease or reservation
+  → reliable SSH and Ansible targeting
+```
+
+Cloud-init keeps first-boot customization outside the image. Terraform outputs
+describe the resulting infrastructure without depending on a specific
+configuration-management tool. The separate `k8s-cluster-setup` project may
+consume node connection details and owns inventory construction, configuration
+management, and Kubernetes lifecycle operations.
