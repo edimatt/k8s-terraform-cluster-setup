@@ -1,0 +1,17 @@
+#cloud-config
+users:
+  - name: ${vm_user}
+    gecos: ${vm_user}
+    groups: [adm, audio, cdrom, dialout, floppy, netdev, plugdev, sudo, video]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+ssh_pwauth: false
+package_update: true
+packages:
+  - qemu-guest-agent
+runcmd:
+  - systemctl enable --now qemu-guest-agent

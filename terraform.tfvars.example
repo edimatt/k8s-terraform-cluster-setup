@@ -1,0 +1,7 @@
+# Override this only if your public key is stored elsewhere.
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+vm_user             = "ubuntu"
+
+# This is normally the existing libvirt NAT network backed by virbr0.
+libvirt_network = "default"
+mac_address = "52:54:00:12:34:56"
