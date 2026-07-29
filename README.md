@@ -13,10 +13,9 @@ GitHub Actions checks Terraform formatting, provider initialization without a
 backend, and Terraform configuration validation on pull requests and pushes to
 `main`. It does not provision or modify libvirt infrastructure.
 
-> **Project status — Milestone 1 in progress:** the current configuration
-> creates one Ubuntu VM intended to become the Kubernetes control-plane node.
-> Multi-node provisioning is planned. The resulting nodes can later be
-> configured by the separate `k8s-ansible-cluster-setup` project.
+> **Project status — two-node lab:** the current configuration creates one
+> Kubernetes control-plane VM and one worker VM. The resulting nodes can later
+> be configured by the separate `k8s-ansible-cluster-setup` project.
 
 ## What this project demonstrates
 
@@ -25,20 +24,22 @@ backend, and Terraform configuration validation on pull requests and pushes to
 - Efficient qcow2 disks backed by a shared Ubuntu base image
 - Unattended first-boot configuration with cloud-init
 - Key-only SSH access and a non-root sudo user
-- Stable network identity through a fixed MAC address
+- Dedicated Terraform-managed NAT network
+- Stable network identity through fixed MAC and DHCP reservations
+- DHCP lease-based IP discovery and generated Ansible inventory
 - Parameterized compute, storage, networking, and image settings
 
 ## Project boundary
 
 This repository owns the infrastructure lifecycle up to SSH-ready Ubuntu nodes:
 
-- libvirt network attachment, storage, and VM lifecycle
+- dedicated libvirt NAT network, storage, and VM lifecycle
 - Ubuntu cloud-image provisioning
 - copy-on-write system disks
 - cloud-init first-boot configuration
 - stable node network identity
 - SSH readiness
-- Terraform outputs
+- Terraform outputs, including an Ansible inventory
 
 The companion `k8s-ansible-cluster-setup` repository owns everything performed inside
 the nodes after first boot:
@@ -51,44 +52,53 @@ the nodes after first boot:
 - final cluster validation
 
 Terraform does not install or bootstrap Kubernetes. It exposes infrastructure
-facts; `k8s-ansible-cluster-setup` owns Ansible inventory construction, configuration
-management, and the Kubernetes lifecycle.
+facts and renders the inventory; `k8s-ansible-cluster-setup` owns configuration
+management and the Kubernetes lifecycle.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     TF["Terraform"] --> LV["libvirt / KVM"]
+    LV --> NET["Dedicated NAT network<br/>DHCP reservations"]
     LV --> IMG["Ubuntu base image"]
     IMG --> DISKS["qcow2 copy-on-write disks"]
-    DISKS --> CP["Control-plane VM<br/>(current)"]
-    DISKS -. planned .-> WK["Worker VMs<br/>(planned)"]
+    DISKS --> CP["Control-plane VM"]
+    DISKS --> WK["Worker VM"]
     CI["cloud-init<br/>user + SSH key + guest agent"] --> CP
-    CI -. planned .-> WK
-    CP --> ID["Stable MAC + DHCP identity"]
-    WK -. planned .-> ID
+    CI --> WK
+    NET --> CP
+    NET --> WK
+    CP --> ID["Fixed MAC + reserved IP"]
+    WK --> ID
     ID --> OUT["Terraform outputs"]
-    OUT -. connection details consumed separately .-> EXT["External consumer<br/>for example: k8s-ansible-cluster-setup"]
+    OUT --> INV["Generated Ansible inventory"]
+    INV --> EXT["k8s-ansible-cluster-setup"]
 ```
 
-The current implementation manages five resources:
+The current implementation manages ten resource instances:
 
-1. A downloaded Ubuntu base volume.
-2. A resizable qcow2 root volume backed by that image.
-3. Rendered cloud-init data containing instance metadata and user
-   configuration.
-4. A libvirt volume containing the generated cloud-init ISO.
-5. A running x86_64 KVM domain attached to the selected storage pool and
+1. A dedicated NAT network with DHCP reservations.
+2. A downloaded Ubuntu base volume.
+3. Two resizable qcow2 root volumes backed by that shared image.
+4. Two rendered cloud-init disks containing per-node instance metadata and
+   shared user configuration.
+5. Two libvirt volumes containing the generated cloud-init ISOs.
+6. Two running x86_64 KVM domains attached to the selected storage pool and
    virtual network.
 
-The default libvirt network provides DHCP and outbound connectivity through
-`virbr0`. The VM is not exposed directly on the physical LAN; inbound access
-from other machines requires routing, port forwarding, or a bridged network.
+The dedicated `k8s-lab` network defaults to `192.168.125.0/24`, provides
+outbound connectivity through NAT, and reserves `.10` for the control plane and
+`.11` for the worker. Dynamic DHCP clients use `.100` through `.254`. The VMs
+are not exposed directly on the physical LAN; inbound access from other
+machines requires routing, port forwarding, or a bridged network. Terraform
+queries each domain's libvirt DHCP lease and reports whether it matches the
+reservation used in the generated inventory.
 
 ## Prerequisites
 
 - An x86_64 Linux host with hardware virtualization enabled
-- QEMU/KVM, libvirt, and the `default` storage pool and network
+- QEMU/KVM, libvirt, and the `default` storage pool
 - Permission to connect to `qemu:///system`
 - Terraform 1.5 or newer
 - An SSH public key
@@ -113,7 +123,7 @@ ssh_public_key_path = "~/.ssh/eagle_ed25519.pub"
 
 The example variable file intentionally demonstrates how to override them.
 
-Initialize Terraform, review the plan, and create the VM:
+Initialize Terraform, review the plan, and create the VMs:
 
 ```bash
 terraform init
@@ -121,20 +131,49 @@ terraform plan
 terraform apply
 ```
 
-Find the DHCP-assigned address:
+Print the generated inventory after provisioning:
 
 ```bash
-virsh -c qemu:///system domifaddr k8s-control
+terraform output -raw ansible_inventory
 ```
 
-Connect using the configured username:
+The default inventory is:
+
+```ini
+[kube_control_plane]
+k8s-control ansible_host=192.168.125.10
+
+[kube_node]
+k8s-worker ansible_host=192.168.125.11
+
+[k8s_cluster:children]
+kube_control_plane
+kube_node
+
+[all:vars]
+ansible_user=edoardo
+ansible_python_interpreter=/usr/bin/python3
+```
+
+The username follows `vm_user`. Export the inventory for Ansible:
 
 ```bash
-ssh edoardo@<vm-ip>
+terraform output -raw ansible_inventory > inventory.ini
 ```
 
-If `terraform.tfvars` overrides `vm_user`, use that value instead. When
-finished, remove the managed infrastructure:
+Inspect the reserved addresses and DHCP lease verification:
+
+```bash
+terraform output nodes
+```
+
+Print the control-plane SSH command:
+
+```bash
+terraform output -raw ssh_command
+```
+
+When finished, remove the managed infrastructure:
 
 ```bash
 terraform destroy
@@ -145,46 +184,116 @@ terraform destroy
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `libvirt_uri` | `qemu:///system` | Libvirt connection URI |
-| `vm_name` | `k8s-control` | Domain and volume name prefix |
+| `vm_name` | `k8s-control` | Control-plane domain and volume name prefix |
 | `vm_user` | `edoardo` | Administrator created by cloud-init |
-| `vm_vcpus` | `2` | Virtual CPU count |
-| `vm_memory_mb` | `4096` | Memory in MiB |
-| `root_disk_size_gib` | `40` | Root disk capacity in GiB |
+| `vm_vcpus` | `2` | Control-plane virtual CPU count |
+| `vm_memory_mb` | `4096` | Control-plane memory in MiB |
+| `root_disk_size_gib` | `40` | Control-plane root disk capacity in GiB |
+| `worker_name` | `k8s-worker` | Worker domain and volume name prefix |
+| `worker_vcpus` | `2` | Worker virtual CPU count |
+| `worker_memory_mb` | `4096` | Worker memory in MiB |
+| `worker_root_disk_size_gib` | `40` | Worker root disk capacity in GiB |
 | `libvirt_pool` | `default` | Existing storage pool |
-| `libvirt_network` | `default` | Existing virtual network |
-| `mac_address` | `52:54:00:12:34:56` | Stable VM network identity |
+| `libvirt_network` | `k8s-lab` | Dedicated network name |
+| `libvirt_network_cidr` | `192.168.125.0/24` | Dedicated network subnet |
+| `libvirt_dhcp_start_host` | `100` | Dynamic DHCP pool start host |
+| `libvirt_dhcp_end_host` | `254` | Dynamic DHCP pool end host |
+| `mac_address` | `52:54:00:12:34:56` | Stable control-plane network identity |
+| `control_plane_ip_host` | `10` | Reserved control-plane host number |
+| `worker_mac_address` | `52:54:00:12:34:57` | Stable worker network identity |
+| `worker_ip_host` | `11` | Reserved worker host number |
 | `image_url` | Ubuntu 26.04 amd64 cloud image | Base operating-system image |
 | `ssh_public_key_path` | `~/.ssh/eagle_ed25519.pub` | Public key installed in the VM |
 
-The fixed MAC address is intentional. It preserves the node's network identity
-across VM recreation and supports a deterministic DHCP lease or reservation.
-The planned multi-node design will assign each node its own unique,
-deterministic fixed MAC address.
+The fixed, unique MAC addresses and reservations preserve the nodes' IP
+addresses across VM recreation. Reservation host numbers must remain outside
+the dynamic DHCP pool.
 
 See [`terraform.tfvars.example`](terraform.tfvars.example) for a minimal local
 configuration. Usernames and paths to public SSH keys are configuration, not
 secrets.
 
+## Dedicated network and reservations
+
+Terraform creates the network rather than attaching the nodes to libvirt's
+shared `default` network. With the defaults, the resulting address plan is:
+
+| Purpose | Address or range |
+| --- | --- |
+| Network | `192.168.125.0/24` |
+| Gateway | `192.168.125.1` |
+| Control-plane reservation | `192.168.125.10` |
+| Worker reservation | `192.168.125.11` |
+| Dynamic DHCP pool | `192.168.125.100`–`192.168.125.254` |
+
+Reservations are generated from the stable node definitions:
+
+```text
+control_plane: 52:54:00:12:34:56 → 192.168.125.10
+worker:        52:54:00:12:34:57 → 192.168.125.11
+```
+
+The gateway is host number `1`. Node addresses and the dynamic range are
+calculated with `cidrhost`, so changing `libvirt_network_cidr` moves the entire
+address plan to the new subnet. Terraform checks that node names, MAC
+addresses, and reservations are unique and that reservations remain outside
+the dynamic pool.
+
+Before choosing another CIDR, ensure that it does not overlap the host LAN,
+VPNs, container networks, or other libvirt networks.
+
 ## Terraform outputs
 
-The current outputs are:
+The main outputs are:
 
 | Output | Description |
 | --- | --- |
 | `vm_name` | Name of the created libvirt domain |
 | `network_name` | Libvirt network attached to the VM |
 | `mac_address` | Fixed MAC address assigned to the VM |
-| `ssh_command` | SSH command template containing an `<vm-ip>` placeholder |
+| `ssh_command` | SSH command using the reserved control-plane address |
+| `nodes` | Names, roles, reserved IPs, discovered leases, and verification |
+| `ansible_inventory` | Complete two-node Ansible inventory |
 
-Inspect them after an apply:
+Inspect every output:
 
 ```bash
 terraform output
 ```
 
-Node names, MAC addresses, discovered or reserved IP addresses, and per-node SSH
-commands are planned outputs for the multi-node implementation. External tools
-may consume these values independently.
+Print or export the inventory without Terraform's string quoting:
+
+```bash
+terraform output -raw ansible_inventory
+terraform output -raw ansible_inventory > inventory.ini
+```
+
+Each entry in `nodes` includes:
+
+- `ip_address` and `reserved_ip`: the deterministic Terraform-managed address;
+- `discovered_ip_address`: the current address reported by the libvirt DHCP
+  lease data source;
+- `lease_verified`: whether the discovered lease matches the reservation.
+
+## Network verification
+
+Inspect the managed network definition and its active leases:
+
+```bash
+virsh -c qemu:///system net-dumpxml k8s-lab
+virsh -c qemu:///system net-dhcp-leases k8s-lab
+```
+
+Inspect the address associated with each domain:
+
+```bash
+virsh -c qemu:///system domifaddr k8s-control --source lease
+virsh -c qemu:///system domifaddr k8s-worker --source lease
+```
+
+The expected addresses are `.10` and `.11`. Unlike unrestricted dynamic
+leases, these addresses remain stable when the VMs are recreated because DHCP
+maps each fixed MAC address to its Terraform-managed reservation.
 
 ## Terraform state
 
@@ -202,7 +311,7 @@ it is copied, shared, or migrated.
 .
 ├── main.tf                    # Volumes, cloud-init media, and VM domain
 ├── variables.tf               # Customizable infrastructure inputs
-├── outputs.tf                 # VM identity and SSH helper output
+├── outputs.tf                 # Node details and generated Ansible inventory
 ├── versions.tf                # Terraform and provider constraints
 ├── cloud-init.yaml.tftpl      # First-boot guest configuration
 ├── terraform.tfvars.example   # Example local values
@@ -221,18 +330,19 @@ it is copied, shared, or migrated.
 
 ### Milestone 2 — Multi-node infrastructure
 
-- [ ] Provision one control-plane node and a configurable number of workers
-- [ ] Assign every node a unique, deterministic fixed MAC address
-- [ ] Assign stable hostnames
-- [ ] Provide deterministic DHCP leases or reservations
-- [ ] Reuse copy-on-write disks backed by the shared base image
+- [x] Provision one control-plane node and one worker
+- [x] Assign every node a unique, deterministic fixed MAC address
+- [x] Assign stable hostnames
+- [x] Manage a dedicated NAT network and DHCP reservations
+- [x] Verify reserved addresses through libvirt DHCP leases
+- [x] Reuse copy-on-write disks backed by the shared base image
 
 ### Milestone 3 — Infrastructure outputs and orchestration
 
-- [ ] Expose per-node infrastructure outputs
-- [ ] Document output semantics
-- [ ] Document how external configuration tools can consume the outputs
-- [ ] Provide an optional external orchestration example
+- [x] Expose per-node infrastructure outputs
+- [x] Generate an Ansible inventory output
+- [x] Document output semantics
+- [x] Document how external configuration tools can consume the outputs
 
 ### Milestone 4 — Validation and CI
 
@@ -255,14 +365,20 @@ it is copied, shared, or migrated.
 
 ## Known limitations
 
-- The configuration currently creates one VM only.
-- Networking uses the existing default libvirt NAT network.
-- There are no per-node outputs for a multi-node topology yet.
+- DHCP lease discovery is evaluated during apply. If the selected network does
+  not yet expose the reserved leases, `discovered_ip_address` can initially be
+  empty and `lease_verified` false. The inventory and SSH output use the
+  Terraform-managed reservations and are not blocked by this provider timing.
+  After the leases appear, refresh the verification fields without modifying
+  infrastructure:
+
+  ```bash
+  terraform apply -refresh-only
+  ```
+
 - End-to-end Kubernetes installation and bootstrap are not implemented in this
   repository.
 - The OVMF firmware path is distribution-specific.
-- The current SSH output contains an IP-address placeholder rather than a
-  discovered or reserved address.
 
 ## Design notes
 
@@ -275,12 +391,11 @@ Stable network identity is equally important to the integration boundary:
 ```text
 VM identity
   → stable fixed MAC address
-  → stable DHCP lease or reservation
+  → Terraform-managed DHCP reservation
   → reliable SSH and Ansible targeting
 ```
 
 Cloud-init keeps first-boot customization outside the image. Terraform outputs
-describe the resulting infrastructure without depending on a specific
-configuration-management tool. The separate `k8s-ansible-cluster-setup` project may
-consume node connection details and owns inventory construction, configuration
-management, and Kubernetes lifecycle operations.
+describe the resulting infrastructure and generate the Ansible inventory. The
+separate `k8s-ansible-cluster-setup` project consumes that inventory and owns
+configuration management and the Kubernetes lifecycle.

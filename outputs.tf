@@ -1,9 +1,52 @@
+locals {
+  node_ipv4_addresses = {
+    for key, node in local.nodes : key => try(
+      flatten([
+        for interface in data.libvirt_domain_interface_addresses.vm[key].interfaces : [
+          for address in interface.addrs : address.addr
+          if lower(interface.hwaddr) == lower(node.mac_address) && address.type == "ipv4"
+        ]
+      ])[0],
+      ""
+    )
+  }
+
+  inventory_groups = {
+    kube_control_plane = [
+      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip}"
+      if node.role == "control-plane"
+    ]
+    kube_node = [
+      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip}"
+      if node.role == "worker"
+    ]
+  }
+
+  ansible_inventory = join("\n", concat(
+    ["[kube_control_plane]"],
+    local.inventory_groups.kube_control_plane,
+    ["", "[kube_node]"],
+    local.inventory_groups.kube_node,
+    [
+      "",
+      "[k8s_cluster:children]",
+      "kube_control_plane",
+      "kube_node",
+      "",
+      "[all:vars]",
+      "ansible_user=${var.vm_user}",
+      "ansible_python_interpreter=/usr/bin/python3",
+      "",
+    ]
+  ))
+}
+
 output "vm_name" {
-  value = libvirt_domain.vm.name
+  value = libvirt_domain.vm["control_plane"].name
 }
 
 output "network_name" {
-  value = var.libvirt_network
+  value = libvirt_network.k8s_lab.name
 }
 
 output "mac_address" {
@@ -11,5 +54,25 @@ output "mac_address" {
 }
 
 output "ssh_command" {
-  value = "ssh ${var.vm_user}@<vm-ip>"
+  value = "ssh ${var.vm_user}@${local.nodes.control_plane.reserved_ip}"
+}
+
+output "ansible_inventory" {
+  description = "Complete Ansible inventory for the Kubernetes control plane and worker."
+  value       = local.ansible_inventory
+}
+
+output "nodes" {
+  description = "VM identity, role, reserved address, and DHCP lease verification by stable node key."
+  value = {
+    for key, node in local.nodes : key => {
+      name                  = libvirt_domain.vm[key].name
+      role                  = node.role
+      mac_address           = node.mac_address
+      ip_address            = node.reserved_ip
+      reserved_ip           = node.reserved_ip
+      discovered_ip_address = local.node_ipv4_addresses[key]
+      lease_verified        = local.node_ipv4_addresses[key] == node.reserved_ip
+    }
+  }
 }
