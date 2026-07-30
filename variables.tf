@@ -5,9 +5,9 @@ variable "libvirt_uri" {
 }
 
 variable "vm_name" {
-  description = "Name of the virtual machine."
+  description = "Name of the control-plane virtual machine."
   type        = string
-  default     = "k8s-control"
+  default     = "k8s-control-01"
 }
 
 variable "vm_user" {
@@ -84,7 +84,7 @@ variable "mac_address" {
 variable "worker_name" {
   description = "Name of the worker virtual machine."
   type        = string
-  default     = "k8s-worker"
+  default     = "k8s-worker-01"
 }
 
 variable "worker_memory_mb" {

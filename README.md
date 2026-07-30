@@ -121,7 +121,8 @@ vm_user            = "edoardo"
 ssh_public_key_path = "~/.ssh/eagle_ed25519.pub"
 ```
 
-The example variable file intentionally demonstrates how to override them.
+The example variable file repeats these defaults so it can be copied and used
+directly, then adjusted for another host as needed.
 
 Initialize Terraform, review the plan, and create the VMs:
 
@@ -140,15 +141,15 @@ terraform output -raw ansible_inventory
 The default inventory is:
 
 ```ini
-[kube_control_plane]
-k8s-control ansible_host=192.168.125.10
+[k8s_control_plane]
+k8s-control-01 ansible_host=192.168.125.10 ansible_port=22
 
-[kube_node]
-k8s-worker ansible_host=192.168.125.11
+[k8s_workers]
+k8s-worker-01 ansible_host=192.168.125.11 ansible_port=22
 
 [k8s_cluster:children]
-kube_control_plane
-kube_node
+k8s_control_plane
+k8s_workers
 
 [all:vars]
 ansible_user=edoardo
@@ -158,7 +159,7 @@ ansible_python_interpreter=/usr/bin/python3
 The username follows `vm_user`. Export the inventory for Ansible:
 
 ```bash
-terraform output -raw ansible_inventory > inventory.ini
+terraform output -raw ansible_inventory > hosts.ini
 ```
 
 Inspect the reserved addresses and DHCP lease verification:
@@ -184,12 +185,12 @@ terraform destroy
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `libvirt_uri` | `qemu:///system` | Libvirt connection URI |
-| `vm_name` | `k8s-control` | Control-plane domain and volume name prefix |
+| `vm_name` | `k8s-control-01` | Control-plane domain and volume name prefix |
 | `vm_user` | `edoardo` | Administrator created by cloud-init |
 | `vm_vcpus` | `2` | Control-plane virtual CPU count |
 | `vm_memory_mb` | `4096` | Control-plane memory in MiB |
 | `root_disk_size_gib` | `40` | Control-plane root disk capacity in GiB |
-| `worker_name` | `k8s-worker` | Worker domain and volume name prefix |
+| `worker_name` | `k8s-worker-01` | Worker domain and volume name prefix |
 | `worker_vcpus` | `2` | Worker virtual CPU count |
 | `worker_memory_mb` | `4096` | Worker memory in MiB |
 | `worker_root_disk_size_gib` | `40` | Worker root disk capacity in GiB |
@@ -265,7 +266,7 @@ Print or export the inventory without Terraform's string quoting:
 
 ```bash
 terraform output -raw ansible_inventory
-terraform output -raw ansible_inventory > inventory.ini
+terraform output -raw ansible_inventory > hosts.ini
 ```
 
 Each entry in `nodes` includes:
@@ -287,8 +288,8 @@ virsh -c qemu:///system net-dhcp-leases k8s-lab
 Inspect the address associated with each domain:
 
 ```bash
-virsh -c qemu:///system domifaddr k8s-control --source lease
-virsh -c qemu:///system domifaddr k8s-worker --source lease
+virsh -c qemu:///system domifaddr k8s-control-01 --source lease
+virsh -c qemu:///system domifaddr k8s-worker-01 --source lease
 ```
 
 The expected addresses are `.10` and `.11`. Unlike unrestricted dynamic
@@ -315,6 +316,7 @@ it is copied, shared, or migrated.
 ├── versions.tf                # Terraform and provider constraints
 ├── cloud-init.yaml.tftpl      # First-boot guest configuration
 ├── terraform.tfvars.example   # Example local values
+├── justfile                    # Shortcuts for the local Terraform workflow
 └── .gitignore                 # Local state and generated-file exclusions
 ```
 

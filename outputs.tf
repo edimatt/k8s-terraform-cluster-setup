@@ -12,26 +12,26 @@ locals {
   }
 
   inventory_groups = {
-    kube_control_plane = [
-      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip}"
+    k8s_control_plane = [
+      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip} ansible_port=22"
       if node.role == "control-plane"
     ]
-    kube_node = [
-      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip}"
+    k8s_workers = [
+      for node in values(local.nodes) : "${node.name} ansible_host=${node.reserved_ip} ansible_port=22"
       if node.role == "worker"
     ]
   }
 
   ansible_inventory = join("\n", concat(
-    ["[kube_control_plane]"],
-    local.inventory_groups.kube_control_plane,
-    ["", "[kube_node]"],
-    local.inventory_groups.kube_node,
+    ["[k8s_control_plane]"],
+    local.inventory_groups.k8s_control_plane,
+    ["", "[k8s_workers]"],
+    local.inventory_groups.k8s_workers,
     [
       "",
       "[k8s_cluster:children]",
-      "kube_control_plane",
-      "kube_node",
+      "k8s_control_plane",
+      "k8s_workers",
       "",
       "[all:vars]",
       "ansible_user=${var.vm_user}",

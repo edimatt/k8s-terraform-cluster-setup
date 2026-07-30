@@ -1,6 +1,6 @@
 # Override this only if your public key is stored elsewhere.
-ssh_public_key_path = "~/.ssh/id_ed25519.pub"
-vm_user             = "ubuntu"
+ssh_public_key_path = "~/.ssh/eagle_ed25519.pub"
+vm_user             = "edoardo"
 
 # Dedicated Terraform-managed NAT network and stable DHCP reservations.
 libvirt_network      = "k8s-lab"
