@@ -10,8 +10,10 @@ performs first-boot configuration with cloud-init.
 ## Continuous integration
 
 GitHub Actions checks Terraform formatting, provider initialization without a
-backend, and Terraform configuration validation on pull requests and pushes to
-`main`. It does not provision or modify libvirt infrastructure.
+backend, configuration validation, and Terraform tests on pull requests and
+pushes to `main`. The tests mock the libvirt provider, so CI does not provision
+or modify libvirt infrastructure. Run the complete CI-equivalent check locally
+with `just check`, or only the test suite with `just test`.
 
 > **Project status — two-node lab:** the current configuration creates one
 > Kubernetes control-plane VM and one worker VM. The resulting nodes can later
@@ -316,6 +318,11 @@ it is copied, shared, or migrated.
 ├── versions.tf                # Terraform and provider constraints
 ├── cloud-init.yaml.tftpl      # First-boot guest configuration
 ├── terraform.tfvars.example   # Example local values
+├── tests/
+│   ├── k8s_lab.tftest.hcl     # Mocked Terraform plan tests
+│   └── fixtures/              # Non-sensitive test input files
+├── .github/workflows/
+│   └── terraform-ci.yml       # Formatting, validation, and test workflow
 ├── justfile                    # Shortcuts for the local Terraform workflow
 └── .gitignore                 # Local state and generated-file exclusions
 ```
@@ -350,7 +357,9 @@ it is copied, shared, or migrated.
 
 - [ ] Validate SSH readiness for all provisioned nodes
 - [ ] Validate the resulting Kubernetes cluster through the external workflow
-- [ ] Add Terraform formatting, validation, and plan checks in CI
+- [x] Add Terraform formatting, provider initialization, and validation in CI
+- [x] Add mocked Terraform plan tests in CI
+- [ ] Add libvirt integration tests on a KVM-capable runner
 - [ ] Add downloaded-image checksum verification
 - [ ] Evaluate remote state for automated execution
 

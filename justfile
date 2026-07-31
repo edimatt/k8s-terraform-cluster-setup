@@ -10,7 +10,7 @@ default: help
 help:
     @echo "Minimal workflow:"
     @echo "  just setup       # Create terraform.tfvars once"
-    @echo "  just check       # Format-check and validate"
+    @echo "  just check       # Format-check, validate, and test"
     @echo "  just plan        # Create a saved Terraform plan"
     @echo "  just show-plan   # Review the saved plan"
     @echo "  just apply       # Apply exactly that plan"
@@ -39,11 +39,16 @@ init-upgrade:
 fmt:
     {{ terraform }} fmt -recursive
 
-# Run the same static checks as CI.
+# Run the same checks as CI.
 check:
     {{ terraform }} fmt -check -recursive -diff
     {{ terraform }} init -backend=false -input=false
     {{ terraform }} validate -no-color
+    {{ terraform }} test -no-color
+
+# Run Terraform tests with the mocked libvirt provider.
+test:
+    {{ terraform }} test -no-color
 
 # Create a saved plan for review.
 plan: init
