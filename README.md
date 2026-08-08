@@ -7,6 +7,14 @@ homelab. The project downloads an Ubuntu cloud image, creates an efficient
 copy-on-write system disk, boots a UEFI virtual machine on KVM/libvirt, and
 performs first-boot configuration with cloud-init.
 
+> **Project status — two-node lab:** the current configuration creates one
+> Kubernetes control-plane VM and one worker VM. The resulting nodes can later
+> be configured by the separate `k8s-ansible-cluster-setup` project.
+
+## Demo
+
+![Terraform Kubernetes homelab deployment demo](demo.gif)
+
 ## Continuous integration
 
 GitHub Actions checks Terraform formatting, provider initialization without a
@@ -14,10 +22,6 @@ backend, configuration validation, and Terraform tests on pull requests and
 pushes to `main`. The tests mock the libvirt provider, so CI does not provision
 or modify libvirt infrastructure. Run the complete CI-equivalent check locally
 with `just check`, or only the test suite with `just test`.
-
-> **Project status — two-node lab:** the current configuration creates one
-> Kubernetes control-plane VM and one worker VM. The resulting nodes can later
-> be configured by the separate `k8s-ansible-cluster-setup` project.
 
 ## What this project demonstrates
 
@@ -103,6 +107,7 @@ reservation used in the generated inventory.
 - QEMU/KVM, libvirt, and the `default` storage pool
 - Permission to connect to `qemu:///system`
 - Terraform 1.5 or newer
+- `jq` for the SSH readiness check
 - An SSH public key
 
 The VM uses the OVMF firmware path
@@ -133,6 +138,24 @@ terraform init
 terraform plan
 terraform apply
 ```
+
+Remove stale host keys and wait for SSH to become available on both VMs:
+
+```bash
+just ssh-test
+```
+
+The check defaults to `~/.ssh/eagle_ed25519`. Override the private key or SSH
+user when the Terraform configuration uses different values:
+
+```bash
+SSH_KEY=~/.ssh/id_ed25519 SSH_USER=ubuntu just ssh-test
+```
+
+The script explicitly uses port 22 so that a different port in the local SSH
+configuration cannot override the VM setting. Set `SSH_PORT` if needed. By
+default, each node is tried 24 times at five-second intervals; set
+`SSH_ATTEMPTS` or `SSH_RETRY_INTERVAL` to change that behavior.
 
 Print the generated inventory after provisioning:
 
@@ -321,6 +344,8 @@ it is copied, shared, or migrated.
 ├── tests/
 │   ├── k8s_lab.tftest.hcl     # Mocked Terraform plan tests
 │   └── fixtures/              # Non-sensitive test input files
+├── scripts/
+│   └── test-ssh.sh             # SSH readiness check for every managed node
 ├── .github/workflows/
 │   └── terraform-ci.yml       # Formatting, validation, and test workflow
 ├── justfile                    # Shortcuts for the local Terraform workflow

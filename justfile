@@ -14,6 +14,7 @@ help:
     @echo "  just plan        # Create a saved Terraform plan"
     @echo "  just show-plan   # Review the saved plan"
     @echo "  just apply       # Apply exactly that plan"
+    @echo "  just ssh-test    # Wait for and verify SSH on every node"
     @echo "  just inventory   # Export hosts.ini"
     @echo
     @just --list
@@ -87,6 +88,10 @@ inventory:
 ssh-command:
     {{ terraform }} output -raw ssh_command
     @echo
+
+# Remove stale host keys and verify SSH access to every managed node.
+ssh-test:
+    ./scripts/test-ssh.sh
 
 # Destroy infrastructure with Terraform's interactive confirmation.
 destroy:
