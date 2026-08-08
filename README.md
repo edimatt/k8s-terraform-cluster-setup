@@ -380,13 +380,13 @@ it is copied, shared, or migrated.
 
 ### Milestone 4 — Validation and CI
 
-- [ ] Validate SSH readiness for all provisioned nodes
+- [x] Validate SSH readiness for all provisioned nodes
 - [ ] Validate the resulting Kubernetes cluster through the external workflow
 - [x] Add Terraform formatting, provider initialization, and validation in CI
 - [x] Add mocked Terraform plan tests in CI
 - [ ] Add libvirt integration tests on a KVM-capable runner
 - [ ] Add downloaded-image checksum verification
-- [ ] Evaluate remote state for automated execution
+- [ ] Configure remote state before enabling shared or automated Terraform applies
 
 ## Security considerations
 
