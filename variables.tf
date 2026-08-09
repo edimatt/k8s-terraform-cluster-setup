@@ -124,7 +124,7 @@ variable "image_url" {
 }
 
 variable "ssh_public_key_path" {
-  description = "Path to the SSH public key installed for the ubuntu user."
+  description = "Path to the SSH public key installed for the cloud-init user."
   type        = string
   default     = "~/.ssh/eagle_ed25519.pub"
 }

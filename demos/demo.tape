@@ -1,4 +1,4 @@
-Output demo.gif
+Output demos/demo.gif
 
 Require just
 Require ssh
